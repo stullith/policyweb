@@ -1,0 +1,39 @@
+trigger:
+  paths:
+    include:
+      - '*'
+    exclude: 
+      - pipelines/
+
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: policyweb
+
+steps:
+  - task: AzureCLI@2
+    displayName: 'Login to Azure Container Registry'
+    inputs:
+      azureSubscription: 'SC-cloudops-test-OIDC'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        az acr login --name $(ACR_NAME)
+
+  - script: |
+      docker build -t $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) .
+    displayName: 'Build Docker image'
+
+  - script: |
+      docker push $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)
+    displayName: 'Push Docker image to ACR'
+
+  - script: |
+      echo $(Build.BuildId) > imageTag.txt
+    displayName: 'Write image tag to file'
+
+  - publish: imageTag.txt
+    artifact: imageTag
+    displayName: 'Publish image tag as artifact' 

@@ -1,0 +1,32 @@
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+
+variables:
+  - group: policyweb
+
+resources:
+  pipelines:
+    - pipeline: policyweb2
+      source: build
+      trigger: true
+
+steps:
+  - download: policyweb2
+    artifact: imageTag
+    displayName: 'Download image tag artifact from build pipeline'
+
+  - script: |
+      IMAGE_TAG=$(cat $(Pipeline.Workspace)/$(IMAGE_NAME)/imageTag/imageTag.txt)
+      echo "##vso[task.setvariable variable=IMAGE_TAG]$IMAGE_TAG"
+    displayName: 'Read image tag'
+
+  - task: AzureWebAppContainer@1
+    displayName: 'Deploy to Azure Web App for Containers'
+    inputs:
+      azureSubscription: '$(AZURE_SUBSCRIPTION)'
+      appName: '$(AZURE_WEBAPP_NAME)'
+      resourceGroupName: '$(AZURE_RESOURCE_GROUP)'
+      containers: '$(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(IMAGE_TAG)' 
