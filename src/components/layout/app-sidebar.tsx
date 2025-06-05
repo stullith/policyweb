@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from "next/link";
@@ -23,6 +24,10 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/trends", label: "Trends", icon: LineChart },
   { href: "/remediation", label: "Remediation", icon: ShieldAlert },
+];
+
+const secondaryNavItems = [
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function AppSidebar() {
@@ -65,14 +70,24 @@ export function AppSidebar() {
       <SidebarFooter className="p-2">
         <SidebarSeparator className="my-2" />
          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Settings" className="justify-start">
-                <Link href="#">
-                  <Settings className="shrink-0" />
-                  <span>Settings</span>
+            {secondaryNavItems.map((item) => (
+              <SidebarMenuItem key={item.href}>
+                <Link href={item.href} passHref legacyBehavior>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === item.href}
+                    onClick={handleLinkClick}
+                    tooltip={item.label}
+                    className="justify-start"
+                  >
+                    <a>
+                      <item.icon className="shrink-0" />
+                      <span>{item.label}</span>
+                    </a>
+                  </SidebarMenuButton>
                 </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+              </SidebarMenuItem>
+            ))}
           </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
