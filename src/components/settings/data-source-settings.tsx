@@ -11,36 +11,39 @@ import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { HardDrive, KeyRound, Building, ListFilter, Save, Fingerprint, KeySquare } from "lucide-react";
+import { Archive, KeySquare, Building, KeyRound, Fingerprint, ListFilter, Save, Info } from "lucide-react";
 
-const baseSchema = z.object({
+const keyVaultBaseSchema = z.object({
+  keyVaultUri: z.string().url("Invalid Key Vault URI.").min(1, "Key Vault URI is required."),
   subscriptionId: z.string().uuid("Invalid Subscription ID format. Must be a UUID."),
   apiEndpoint: z.string().url("Invalid API Endpoint URL.").optional().or(z.literal('')),
 });
 
-const clientSecretAuthSchema = baseSchema.extend({
-  authMethod: z.literal("clientSecret"),
-  tenantId: z.string().uuid("Invalid Tenant ID format. Must be a UUID."),
-  clientId: z.string().uuid("Invalid Client ID format. Must be a UUID."),
-  clientSecret: z.string().min(1, "Client Secret is required."),
+const clientSecretFromKvSchema = keyVaultBaseSchema.extend({
+  apiAuthMethod: z.literal("clientSecretInKv"),
+  tenantIdSecretName: z.string().min(1, "Tenant ID Secret Name is required."),
+  clientIdSecretName: z.string().min(1, "Client ID Secret Name is required."),
+  clientSecretName: z.string().min(1, "Client Secret Name is required."),
 });
 
-const clientCertificateAuthSchema = baseSchema.extend({
-  authMethod: z.literal("clientCertificate"),
-  tenantId: z.string().uuid("Invalid Tenant ID format. Must be a UUID."),
-  clientId: z.string().uuid("Invalid Client ID format. Must be a UUID."),
-  certificateThumbprint: z.string().regex(/^[a-fA-F0-9]{40}$/, "Invalid Certificate Thumbprint format. Must be a 40-character hex string."),
+const clientCertificateFromKvSchema = keyVaultBaseSchema.extend({
+  apiAuthMethod: z.literal("clientCertificateInKv"),
+  tenantIdSecretName: z.string().min(1, "Tenant ID Secret Name is required."),
+  clientIdSecretName: z.string().min(1, "Client ID Secret Name is required."),
+  certificateThumbprintSecretName: z.string().min(1, "Certificate Thumbprint Secret Name is required."),
 });
 
-const managedIdentityAuthSchema = baseSchema.extend({
-  authMethod: z.literal("managedIdentity"),
-  clientId: z.string().uuid("Invalid Client ID format. Must be a UUID.").optional().or(z.literal('')).describe("Optional: Client ID of the User-Assigned Managed Identity."),
+const managedIdentitySchema = keyVaultBaseSchema.extend({
+  apiAuthMethod: z.literal("managedIdentityInKv"),
+  // If Azure API is accessed by UAMI, its Client ID might be stored in KV.
+  managedIdentityClientIdSecretName: z.string().min(1, "User-Assigned MI Client ID Secret Name is required if its Client ID is in Key Vault.").optional().or(z.literal('')),
 });
 
-const dataSourceSchema = z.discriminatedUnion("authMethod", [
-  clientSecretAuthSchema,
-  clientCertificateAuthSchema,
-  managedIdentityAuthSchema,
+
+const dataSourceSchema = z.discriminatedUnion("apiAuthMethod", [
+  clientSecretFromKvSchema,
+  clientCertificateFromKvSchema,
+  managedIdentitySchema,
 ]);
 
 type DataSourceFormData = z.infer<typeof dataSourceSchema>;
@@ -52,27 +55,29 @@ export function DataSourceSettings() {
   const form = useForm<DataSourceFormData>({
     resolver: zodResolver(dataSourceSchema),
     defaultValues: {
-      authMethod: "clientSecret",
-      tenantId: "",
-      clientId: "",
-      clientSecret: "",
+      keyVaultUri: "",
+      apiAuthMethod: "clientSecretInKv",
+      tenantIdSecretName: "",
+      clientIdSecretName: "",
+      clientSecretName: "",
+      // certificateThumbprintSecretName will be undefined initially unless apiAuthMethod is clientCertificateInKv
       subscriptionId: "",
       apiEndpoint: "https://management.azure.com",
-      certificateThumbprint: "",
+      // managedIdentityClientIdSecretName will be undefined initially
     },
   });
 
-  const watchedAuthMethod = form.watch("authMethod");
+  const watchedApiAuthMethod = form.watch("apiAuthMethod");
 
   const onSubmit: SubmitHandler<DataSourceFormData> = async (data) => {
     setIsLoading(true);
-    console.log("Saving data source settings:", data);
+    console.log("Saving Key Vault and API data source settings:", data);
     // Simulate API call
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     toast({
       title: "Settings Saved",
-      description: "Azure REST API data source settings have been saved.",
+      description: "Azure Key Vault and API data source settings have been saved.",
     });
     setIsLoading(false);
   };
@@ -81,11 +86,12 @@ export function DataSourceSettings() {
     <Card className="shadow-lg rounded-lg">
       <CardHeader>
         <CardTitle className="text-lg flex items-center">
-          <HardDrive className="mr-2 h-5 w-5 text-primary" />
-          Azure Data Source Configuration
+          <Archive className="mr-2 h-5 w-5 text-primary" />
+          Azure Data Source (via Key Vault)
         </CardTitle>
         <CardDescription>
-          Configure how this application authenticates with the Azure REST API to fetch compliance data.
+          Configure Azure Key Vault details to fetch Azure REST API credentials.
+          The application must have permissions (e.g., via Managed Identity) to access the specified Key Vault.
         </CardDescription>
       </CardHeader>
       <Form {...form}>
@@ -93,43 +99,63 @@ export function DataSourceSettings() {
           <CardContent className="space-y-6">
             <FormField
               control={form.control}
-              name="authMethod"
+              name="keyVaultUri"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="flex items-center">
+                    <Archive className="mr-2 h-4 w-4 text-muted-foreground" />
+                    Azure Key Vault URI
+                  </FormLabel>
+                  <FormControl>
+                    <Input placeholder="e.g., https://your-keyvault-name.vault.azure.net/" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            
+            <FormField
+              control={form.control}
+              name="apiAuthMethod"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel className="flex items-center">
                     <KeySquare className="mr-2 h-4 w-4 text-muted-foreground" />
-                    Authentication Method
+                    Azure API Authentication Method (Credentials from Key Vault)
                   </FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select an authentication method" />
+                        <SelectValue placeholder="Select API authentication method" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="clientSecret">Client Secret</SelectItem>
-                      <SelectItem value="clientCertificate">Client Certificate</SelectItem>
-                      <SelectItem value="managedIdentity">Managed Identity</SelectItem>
+                      <SelectItem value="clientSecretInKv">Service Principal with Client Secret</SelectItem>
+                      <SelectItem value="clientCertificateInKv">Service Principal with Client Certificate</SelectItem>
+                      <SelectItem value="managedIdentityInKv">Azure Managed Identity (for API Access)</SelectItem>
                     </SelectContent>
                   </Select>
+                  <FormDescription>
+                    This method determines what type of credential will be fetched from Key Vault to authenticate to the Azure API.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
             />
 
-            {(watchedAuthMethod === "clientSecret" || watchedAuthMethod === "clientCertificate") && (
+            {(watchedApiAuthMethod === "clientSecretInKv" || watchedApiAuthMethod === "clientCertificateInKv") && (
               <>
                 <FormField
                   control={form.control}
-                  name="tenantId"
+                  name="tenantIdSecretName"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel className="flex items-center">
                         <Building className="mr-2 h-4 w-4 text-muted-foreground" />
-                        Tenant ID
+                        Tenant ID (Secret Name in Key Vault)
                       </FormLabel>
                       <FormControl>
-                        <Input placeholder="Enter your Azure Tenant ID (UUID)" {...field} />
+                        <Input placeholder="Name of secret storing Tenant ID" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -137,15 +163,15 @@ export function DataSourceSettings() {
                 />
                 <FormField
                   control={form.control}
-                  name="clientId"
+                  name="clientIdSecretName"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel className="flex items-center">
                         <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" />
-                        Client ID (Application ID)
+                        Client ID (Secret Name in Key Vault)
                       </FormLabel>
                       <FormControl>
-                        <Input placeholder="Enter your Azure App Registration Client ID (UUID)" {...field} />
+                        <Input placeholder="Name of secret storing Client ID" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -154,74 +180,70 @@ export function DataSourceSettings() {
               </>
             )}
 
-            {watchedAuthMethod === "clientSecret" && (
+            {watchedApiAuthMethod === "clientSecretInKv" && (
               <FormField
                 control={form.control}
-                name="clientSecret"
+                name="clientSecretName"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel className="flex items-center">
                       <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" />
-                      Client Secret
+                      Client Secret (Secret Name in Key Vault)
                     </FormLabel>
                     <FormControl>
-                      <Input type="password" placeholder="Enter your Azure App Registration Client Secret" {...field} />
+                      <Input placeholder="Name of secret storing Client Secret" {...field} />
                     </FormControl>
-                    <FormDescription>
-                      Client secrets are sensitive. Ensure this application is hosted securely.
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             )}
 
-            {watchedAuthMethod === "clientCertificate" && (
+            {watchedApiAuthMethod === "clientCertificateInKv" && (
               <FormField
                 control={form.control}
-                name="certificateThumbprint"
+                name="certificateThumbprintSecretName"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel className="flex items-center">
                       <Fingerprint className="mr-2 h-4 w-4 text-muted-foreground" />
-                      Certificate Thumbprint
+                      Certificate Thumbprint (Secret Name in Key Vault)
                     </FormLabel>
                     <FormControl>
-                      <Input placeholder="Enter the 40-character certificate thumbprint" {...field} />
+                      <Input placeholder="Name of secret storing Certificate Thumbprint" {...field} />
                     </FormControl>
-                    <FormDescription>
-                      The thumbprint of the client certificate registered with the App Registration.
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             )}
             
-            {watchedAuthMethod === "managedIdentity" && (
+            {watchedApiAuthMethod === "managedIdentityInKv" && (
               <>
                 <FormField
                     control={form.control}
-                    // Cast is safe due to discriminated union structure; this field is only relevant here
-                    name={"clientId" as any} 
+                    name={"managedIdentityClientIdSecretName" as any} 
                     render={({ field }) => (
                         <FormItem>
                         <FormLabel className="flex items-center">
                             <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" />
-                            Client ID (User-Assigned Managed Identity)
+                            User-Assigned MI Client ID (Secret Name in Key Vault)
                         </FormLabel>
                         <FormControl>
-                            <Input placeholder="Optional: Client ID of User-Assigned MI" {...field} />
+                            <Input placeholder="Optional: Secret name for User-Assigned MI Client ID" {...field} />
                         </FormControl>
                         <FormDescription>
-                            Leave blank for System-Assigned Managed Identity. Provide the Client ID for User-Assigned Managed Identity.
+                            If the Azure API will be accessed by a User-Assigned Managed Identity, and its Client ID is stored in Key Vault, provide the secret name. Leave blank for System-Assigned MI or if Client ID is configured elsewhere.
                         </FormDescription>
                         <FormMessage />
                         </FormItem>
                     )}
                     />
-                <div className="p-4 bg-muted/50 rounded-md text-sm text-muted-foreground">
-                  When using Managed Identity, Azure securely manages the credentials. Ensure this application is hosted in an Azure service that supports Managed Identities (e.g., App Service, Azure Functions, VMs) and that the Managed Identity has appropriate permissions.
+                <div className="p-3 bg-muted/30 rounded-md text-sm text-muted-foreground flex items-start">
+                  <Info className="mr-2 h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    When using Managed Identity to access the Azure API, ensure the Managed Identity (System-Assigned or User-Assigned) for this application has the necessary permissions (e.g., 'Reader') on the target Azure resources.
+                  </span>
                 </div>
               </>
             )}
@@ -233,10 +255,10 @@ export function DataSourceSettings() {
                 <FormItem>
                   <FormLabel className="flex items-center">
                      <ListFilter className="mr-2 h-4 w-4 text-muted-foreground" />
-                    Subscription ID
+                    Azure Subscription ID to Monitor
                   </FormLabel>
                   <FormControl>
-                    <Input placeholder="Enter the Azure Subscription ID to monitor (UUID)" {...field} />
+                    <Input placeholder="Enter the Azure Subscription ID (UUID)" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -273,4 +295,3 @@ export function DataSourceSettings() {
     </Card>
   );
 }
-
