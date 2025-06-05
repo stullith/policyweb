@@ -19,6 +19,7 @@
 
 # production
 /build
+/pipelines
 
 # misc
 .DS_Store
