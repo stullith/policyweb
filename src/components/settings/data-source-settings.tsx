@@ -4,7 +4,6 @@
 import React, { useState } from "react";
 import { useForm, type SubmitHandler, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,73 +13,28 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { useToast } from "@/hooks/use-toast";
 import { Archive, KeySquare, Building, KeyRound, Fingerprint, ListFilter, Save, Info, PlusCircle, Trash2, Server } from "lucide-react";
 
-// Base schema for Key Vault and common API details
-const keyVaultBaseSchema = z.object({
-  keyVaultUri: z.string().url("Invalid Key Vault URI.").min(1, "Key Vault URI is required."),
-  subscriptionId: z.string().uuid("Invalid Subscription ID format. Must be a UUID."),
-  apiEndpoint: z.string().url("Invalid API Endpoint URL.").optional().or(z.literal('')),
-  configName: z.string().min(1, "Configuration name is required.").optional().describe("A user-friendly name for this configuration."),
-});
-
-// Schema for Service Principal with Client Secret from Key Vault
-const clientSecretFromKvSchema = keyVaultBaseSchema.extend({
-  apiAuthMethod: z.literal("clientSecretInKv"),
-  tenantIdSecretName: z.string().min(1, "Tenant ID Secret Name is required."),
-  clientIdSecretName: z.string().min(1, "Client ID Secret Name is required."),
-  clientSecretName: z.string().min(1, "Client Secret Name is required."),
-});
-
-// Schema for Service Principal with Client Certificate from Key Vault
-const clientCertificateFromKvSchema = keyVaultBaseSchema.extend({
-  apiAuthMethod: z.literal("clientCertificateInKv"),
-  tenantIdSecretName: z.string().min(1, "Tenant ID Secret Name is required."),
-  clientIdSecretName: z.string().min(1, "Client ID Secret Name is required."),
-  certificateThumbprintSecretName: z.string().min(1, "Certificate Thumbprint Secret Name is required."),
-});
-
-// Schema for Azure Managed Identity (credentials for API access from Key Vault or implicit)
-const managedIdentitySchema = keyVaultBaseSchema.extend({
-  apiAuthMethod: z.literal("managedIdentityInKv"),
-  managedIdentityClientIdSecretName: z.string().min(1, "User-Assigned MI Client ID Secret Name is required if its Client ID is in Key Vault.").optional().or(z.literal('')),
-});
-
-// Discriminated union for a single data source configuration
-const singleDataSourceSchema = z.discriminatedUnion("apiAuthMethod", [
-  clientSecretFromKvSchema,
-  clientCertificateFromKvSchema,
-  managedIdentitySchema,
-]);
-type SingleDataSourceFormData = z.infer<typeof singleDataSourceSchema>;
-
-// Top-level schema for multiple configurations
-const multipleDataSourcesSchema = z.object({
-  configurations: z.array(singleDataSourceSchema).min(1, "At least one data source configuration is required."),
-});
-type MultipleDataSourcesFormData = z.infer<typeof multipleDataSourcesSchema>;
+import { 
+  multipleDataSourcesSchema, 
+  type MultipleDataSourcesFormData, 
+  type SingleDataSourceFormData,
+  defaultNewConfiguration 
+} from '@/lib/data-source-config-schema';
+import { saveDataSourceSettings } from '@/app/(app)/settings/actions';
 
 
-const defaultNewConfiguration: SingleDataSourceFormData = {
-  keyVaultUri: "",
-  apiAuthMethod: "clientSecretInKv",
-  tenantIdSecretName: "",
-  clientIdSecretName: "",
-  clientSecretName: "",
-  subscriptionId: "",
-  apiEndpoint: "https://management.azure.com",
-  configName: "",
-  // certificateThumbprintSecretName and managedIdentityClientIdSecretName are implicitly undefined
-};
+interface DataSourceSettingsProps {
+  initialConfigurations: MultipleDataSourcesFormData;
+}
 
-
-export function DataSourceSettings() {
+export function DataSourceSettings({ initialConfigurations }: DataSourceSettingsProps) {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
   const form = useForm<MultipleDataSourcesFormData>({
     resolver: zodResolver(multipleDataSourcesSchema),
-    defaultValues: {
-      configurations: [JSON.parse(JSON.stringify(defaultNewConfiguration))], // Deep copy
-    },
+    defaultValues: initialConfigurations && initialConfigurations.configurations && initialConfigurations.configurations.length > 0
+      ? initialConfigurations
+      : { configurations: [JSON.parse(JSON.stringify(defaultNewConfiguration))] },
   });
 
   const { fields, append, remove } = useFieldArray({
@@ -90,14 +44,20 @@ export function DataSourceSettings() {
 
   const onSubmit: SubmitHandler<MultipleDataSourcesFormData> = async (data) => {
     setIsLoading(true);
-    console.log("Saving Multiple Azure Data Source Settings:", data.configurations);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    const result = await saveDataSourceSettings(data);
     
-    toast({
-      title: "Settings Saved",
-      description: `Successfully saved ${data.configurations.length} Azure data source configuration(s).`,
-    });
+    if (result.success) {
+      toast({
+        title: "Settings Saved",
+        description: result.message || `Successfully saved ${data.configurations.length} Azure data source configuration(s).`,
+      });
+    } else {
+       toast({
+        title: "Error Saving Settings",
+        description: result.message || "An unexpected error occurred.",
+        variant: "destructive",
+      });
+    }
     setIsLoading(false);
   };
 
@@ -111,12 +71,13 @@ export function DataSourceSettings() {
         <CardDescription>
           Manage configurations for multiple Azure subscriptions. Credentials will be fetched from Azure Key Vault.
           The application must have permissions (e.g., via Managed Identity) to access the specified Key Vaults.
+          Settings are stored in a server-side JSON file (ensure it's in .gitignore).
         </CardDescription>
       </CardHeader>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)}>
           <CardContent className="space-y-4">
-            <Accordion type="multiple" className="w-full space-y-4">
+            <Accordion type="multiple" className="w-full space-y-4" defaultValue={fields.map((_, index) => `item-${index}`)}>
               {fields.map((field, index) => {
                 const watchedApiAuthMethod = form.watch(`configurations.${index}.apiAuthMethod`);
                 const watchedSubscriptionId = form.watch(`configurations.${index}.subscriptionId`);
@@ -135,7 +96,7 @@ export function DataSourceSettings() {
                                 size="icon"
                                 className="text-destructive hover:bg-destructive/10 h-8 w-8"
                                 onClick={(e) => {
-                                e.stopPropagation(); // Prevent accordion toggle
+                                e.stopPropagation(); 
                                 remove(index);
                                 }}
                             >
@@ -358,14 +319,14 @@ export function DataSourceSettings() {
               type="button" 
               variant="outline" 
               className="mt-4"
-              onClick={() => append(JSON.parse(JSON.stringify(defaultNewConfiguration)))} // Deep copy
+              onClick={() => append(JSON.parse(JSON.stringify(defaultNewConfiguration)))}
             >
               <PlusCircle className="mr-2 h-4 w-4" />
               Add Subscription Configuration
             </Button>
           </CardContent>
           <CardFooter className="border-t pt-6 flex justify-end">
-            <Button type="submit" disabled={isLoading || fields.length === 0}>
+            <Button type="submit" disabled={isLoading}>
               <Save className="mr-2 h-4 w-4" />
               {isLoading ? "Saving..." : "Save All Configurations"}
             </Button>
@@ -375,5 +336,3 @@ export function DataSourceSettings() {
     </Card>
   );
 }
-
-    
